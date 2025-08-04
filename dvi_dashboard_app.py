@@ -5,9 +5,6 @@ import sqlite3
 st.set_page_config(page_title="Autoflow + MaddenCo Dashboard", layout="wide")
 st.title("📊 DVI Performance Dashboard")
 
-# --- Location Input ---
-location = st.text_input("Enter store location or ID (e.g., McCordsville, 215)")
-
 # --- SQLite Setup ---
 conn = sqlite3.connect("dvi_data.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -27,13 +24,34 @@ CREATE TABLE IF NOT EXISTS dvi_reports (
 """)
 conn.commit()
 
-# --- File Uploads ---
+# --- Sidebar Upload and Location Selection ---
 st.sidebar.header("Upload Files")
+
 autoflow_file = st.sidebar.file_uploader("Upload Autoflow CSV", type=["csv"])
 maddenco_file = st.sidebar.file_uploader("Upload MaddenCo Excel", type=["xlsx"])
 
+location = None
+if autoflow_file and maddenco_file:
+    location = st.sidebar.selectbox(
+        "Select Store Location for This Upload",
+        ["-- Select a Store --", "215 - McCordsville", "203 - Anderson", "217 - Plainfield"]
+    )
+
+    if location.startswith("--"):
+        st.sidebar.warning("Please select a store location to continue.")
+        location = None
+
+# --- Dev Tool to Clear Database ---
+with st.sidebar.expander("⚠️ Dev Tools"):
+    if st.button("Clear all uploaded data from database"):
+        cursor.execute("DELETE FROM dvi_reports")
+        conn.commit()
+        st.warning("All records have been deleted from the database.")
+
 # --- File Processing ---
 if autoflow_file and maddenco_file and location:
+    store_id = location.split(" - ")[0]  # e.g., "215"
+
     # Load Autoflow
     autoflow_df = pd.read_csv(autoflow_file)
     autoflow_df["RO#"] = autoflow_df["RO#"].astype(str).str.strip()
@@ -78,7 +96,7 @@ if autoflow_file and maddenco_file and location:
                     customer, vehicle, customer_viewed, sent, upload_date
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             """, (
-                location,
+                store_id,
                 str(row["RO#"]),
                 row["Status Category"],
                 row["Invoice Total"],
@@ -126,7 +144,7 @@ if autoflow_file and maddenco_file and location:
         "RO#", "Status Category", "Invoice Total", "Customer", "Vehicle", "Customer Viewed", "Sent"
     ]])
 else:
-    st.info("Please upload both files and enter a store location to begin.")
+    st.info("Please upload both files and select a store location to begin.")
 
 # --- View Stored Reports ---
 st.header("📍 View Stored Reports by Location")
