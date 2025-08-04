@@ -44,7 +44,7 @@ if autoflow_file and maddenco_file:
         axis=1
     )
 
-    # Summary Table
+    # --- Summary Metrics ---
     summary = merged_df.groupby("Status Category")["Invoice Total"].agg(["count", "mean"]).reset_index()
     summary = summary.rename(columns={"count": "RO Count", "mean": "Average Ticket"})
 
@@ -54,7 +54,28 @@ if autoflow_file and maddenco_file:
         with [col1, col2, col3][idx % 3]:
             st.metric(label=row["Status Category"], value=f"${row['Average Ticket']:.2f}", delta=int(row["RO Count"]))
 
+    # --- Completion & Engagement Funnel ---
+    total_invoices = maddenco_df["Invoice #"].nunique()
+    matched_invoices = merged_df["Invoice #"].notna().sum()
+    dvi_completion_pct = (matched_invoices / total_invoices) * 100 if total_invoices > 0 else 0
+
+    dvi_completed = merged_df[merged_df["Invoice #"].notna()]
+    dvi_sent = dvi_completed[dvi_completed["DVI Sent"] == "Y"]
+    sent_pct = (len(dvi_sent) / len(dvi_completed)) * 100 if len(dvi_completed) > 0 else 0
+
+    dvi_viewed = dvi_sent[dvi_sent["Customer Viewed"] != "--"]
+    viewed_pct = (len(dvi_viewed) / len(dvi_sent)) * 100 if len(dvi_sent) > 0 else 0
+
+    st.subheader("DVI Completion & Engagement Metrics")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("DVI Completion %", f"{dvi_completion_pct:.1f}%", f"{matched_invoices}/{total_invoices} invoices")
+    c2.metric("DVI Sent %", f"{sent_pct:.1f}%", f"{len(dvi_sent)}/{len(dvi_completed)} completed")
+    c3.metric("DVI Viewed %", f"{viewed_pct:.1f}%", f"{len(dvi_viewed)}/{len(dvi_sent)} sent")
+
+    # --- RO Table ---
     st.subheader("All Matched ROs")
-    st.dataframe(merged_df[["RO#", "Status Category", "Invoice Total", "Customer", "Vehicle", "Customer Viewed", "Sent"]])
+    st.dataframe(merged_df[[
+        "RO#", "Status Category", "Invoice Total", "Customer", "Vehicle", "Customer Viewed", "Sent"
+    ]])
 else:
     st.info("Please upload both Autoflow and MaddenCo files to begin.")
