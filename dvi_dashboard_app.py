@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Autoflow + MaddenCo Dashboard", layout="wide")
 st.title("📊 DVI Performance Dashboard")
@@ -24,22 +25,33 @@ CREATE TABLE IF NOT EXISTS dvi_reports (
 """)
 conn.commit()
 
-# --- Sidebar Upload and Location Selection ---
+# --- Sidebar Upload & Location ---
 st.sidebar.header("Upload Files")
 
 autoflow_file = st.sidebar.file_uploader("Upload Autoflow CSV", type=["csv"])
 maddenco_file = st.sidebar.file_uploader("Upload MaddenCo Excel", type=["xlsx"])
 
+store_options = sorted([
+    "108 - Decatur/IL", "112 - Havana/IL", "118 - Lincoln/IL",
+    "119 - Litchfield/IL", "122 - Mattoon/IL", "124 - Mt Zion/IL",
+    "138 - Washington/IL", "142 - Lawrenceville/IL", "215 - McCordsville/IN",
+    "Other (Manual Entry)"
+])
+
 location = None
 if autoflow_file and maddenco_file:
-    location = st.sidebar.selectbox(
-        "Select Store Location for This Upload",
-        ["-- Select a Store --", "215 - McCordsville", "203 - Anderson", "217 - Plainfield"]
-    )
+    selected_option = st.sidebar.selectbox("Select Store Location for This Upload", ["-- Select a Store --"] + store_options)
 
-    if location.startswith("--"):
+    if selected_option == "-- Select a Store --":
         st.sidebar.warning("Please select a store location to continue.")
-        location = None
+    elif selected_option == "Other (Manual Entry)":
+        manual_entry = st.sidebar.text_input("Enter custom store ID and name (e.g., 301 - Springfield/IL)")
+        if manual_entry:
+            location = manual_entry
+        else:
+            st.sidebar.warning("Please enter a location.")
+    else:
+        location = selected_option
 
 # --- Dev Tool to Clear Database ---
 with st.sidebar.expander("⚠️ Dev Tools"):
@@ -50,13 +62,11 @@ with st.sidebar.expander("⚠️ Dev Tools"):
 
 # --- File Processing ---
 if autoflow_file and maddenco_file and location:
-    store_id = location.split(" - ")[0]  # e.g., "215"
+    store_id = location.split(" - ")[0].strip()
 
-    # Load Autoflow
     autoflow_df = pd.read_csv(autoflow_file)
     autoflow_df["RO#"] = autoflow_df["RO#"].astype(str).str.strip()
 
-    # Load MaddenCo
     maddenco_df = pd.read_excel(maddenco_file, header=1)
     maddenco_df = maddenco_df[maddenco_df["Unnamed: 1"] == "Invoice"]
     maddenco_df = maddenco_df.rename(columns={
@@ -66,17 +76,14 @@ if autoflow_file and maddenco_file and location:
     maddenco_df["Invoice #"] = maddenco_df["Invoice #"].astype(str)
     maddenco_df["RO#"] = maddenco_df["Invoice #"].str[-len(autoflow_df["RO#"].iloc[0]):]
 
-    # Merge files
     merged_df = pd.merge(autoflow_df, maddenco_df, on="RO#", how="left")
     merged_df["Invoice Total"] = pd.to_numeric(merged_df["Invoice Total"], errors='coerce')
 
-    # Calculate DVI Sent
     merged_df["DVI Sent"] = merged_df.apply(
         lambda row: "Y" if row["Sent"] == "✓" and (row["Sent via Text"] != "--" or row["Sent via Email"] != "--") else "N",
         axis=1
     )
 
-    # DVI Status Category
     merged_df["Status Category"] = merged_df.apply(
         lambda row: (
             "Viewed" if row["Customer Viewed"] != "--" else
@@ -86,7 +93,6 @@ if autoflow_file and maddenco_file and location:
         axis=1
     )
 
-    # --- Insert into DB ---
     try:
         rows_to_insert = merged_df[["RO#", "Status Category", "Invoice Total", "Customer", "Vehicle", "Customer Viewed", "Sent"]]
         for _, row in rows_to_insert.iterrows():
@@ -110,7 +116,6 @@ if autoflow_file and maddenco_file and location:
     except Exception as e:
         st.error(f"❌ Failed to insert data: {e}")
 
-    # --- Summary Metrics ---
     summary = merged_df.groupby("Status Category")["Invoice Total"].agg(["count", "mean"]).reset_index()
     summary = summary.rename(columns={"count": "RO Count", "mean": "Average Ticket"})
 
@@ -120,7 +125,6 @@ if autoflow_file and maddenco_file and location:
         with [col1, col2, col3][idx % 3]:
             st.metric(label=row["Status Category"], value=f"${row['Average Ticket']:.2f}", delta=int(row["RO Count"]))
 
-    # --- Completion Funnel ---
     total_invoices = maddenco_df["Invoice #"].nunique()
     matched_invoices = merged_df["Invoice #"].notna().sum()
     dvi_completion_pct = (matched_invoices / total_invoices) * 100 if total_invoices > 0 else 0
@@ -138,7 +142,6 @@ if autoflow_file and maddenco_file and location:
     c2.metric("DVI Sent %", f"{sent_pct:.1f}%", f"{len(dvi_sent)}/{len(dvi_completed)} completed")
     c3.metric("DVI Viewed %", f"{viewed_pct:.1f}%", f"{len(dvi_viewed)}/{len(dvi_sent)} sent")
 
-    # --- RO Table ---
     st.subheader("All Matched ROs")
     st.dataframe(merged_df[[
         "RO#", "Status Category", "Invoice Total", "Customer", "Vehicle", "Customer Viewed", "Sent"
@@ -149,16 +152,25 @@ else:
 # --- View Stored Reports ---
 st.header("📍 View Stored Reports by Location")
 
-cursor.execute("SELECT DISTINCT location FROM dvi_reports")
+cursor.execute("SELECT DISTINCT location FROM dvi_reports ORDER BY location ASC")
 locations = [row[0] for row in cursor.fetchall()]
 
 if locations:
     selected_loc = st.selectbox("Select a location to view stored data", locations)
 
+    st.markdown("### 📅 Filter by Upload Date")
+    date_range = st.date_input(
+        "Select date range",
+        value=[datetime.today() - timedelta(days=30), datetime.today()]
+    )
+
+    start_date = date_range[0].strftime("%Y-%m-%d")
+    end_date = date_range[1].strftime("%Y-%m-%d")
+
     df = pd.read_sql_query("""
         SELECT * FROM dvi_reports
-        WHERE location = ?
-    """, conn, params=(selected_loc,))
+        WHERE location = ? AND DATE(upload_date) BETWEEN ? AND ?
+    """, conn, params=(selected_loc, start_date, end_date))
 
     if not df.empty:
         summary = df.groupby("status_category")["invoice_total"].agg(["count", "mean"]).reset_index()
@@ -186,6 +198,6 @@ if locations:
             "ro_number", "status_category", "invoice_total", "customer", "vehicle", "customer_viewed", "sent", "upload_date"
         ]])
     else:
-        st.warning(f"No records found for {selected_loc}")
+        st.warning(f"No records found for {selected_loc} in selected date range.")
 else:
     st.info("No stored data yet. Upload files to begin saving to the database.")
