@@ -9,6 +9,14 @@ st.title("📊 DVI Performance Dashboard")
 # --- SQLite Setup ---
 conn = sqlite3.connect("dvi_data.db", check_same_thread=False)
 cursor = conn.cursor()
+
+# Drop & recreate table if invoice_date column is missing
+cursor.execute("PRAGMA table_info(dvi_reports)")
+columns = [col[1] for col in cursor.fetchall()]
+if "invoice_date" not in columns:
+    cursor.execute("DROP TABLE IF EXISTS dvi_reports")
+    conn.commit()
+
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS dvi_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +36,6 @@ conn.commit()
 
 # --- Sidebar Upload & Location ---
 st.sidebar.header("Upload Files")
-
 autoflow_file = st.sidebar.file_uploader("Upload Autoflow CSV", type=["csv"])
 maddenco_file = st.sidebar.file_uploader("Upload MaddenCo Excel", type=["xlsx"])
 
@@ -42,7 +49,6 @@ store_options = sorted([
 location = None
 if autoflow_file and maddenco_file:
     selected_option = st.sidebar.selectbox("Select Store Location for This Upload", ["-- Select a Store --"] + store_options)
-
     if selected_option == "-- Select a Store --":
         st.sidebar.warning("Please select a store location to continue.")
     elif selected_option == "Other (Manual Entry)":
