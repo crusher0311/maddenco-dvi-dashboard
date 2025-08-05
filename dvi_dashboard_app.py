@@ -28,6 +28,7 @@ conn.commit()
 
 # --- Sidebar Upload & Location ---
 st.sidebar.header("Upload Files")
+
 autoflow_file = st.sidebar.file_uploader("Upload Autoflow CSV", type=["csv"])
 maddenco_file = st.sidebar.file_uploader("Upload MaddenCo Excel", type=["xlsx"])
 
@@ -41,6 +42,7 @@ store_options = sorted([
 location = None
 if autoflow_file and maddenco_file:
     selected_option = st.sidebar.selectbox("Select Store Location for This Upload", ["-- Select a Store --"] + store_options)
+
     if selected_option == "-- Select a Store --":
         st.sidebar.warning("Please select a store location to continue.")
     elif selected_option == "Other (Manual Entry)":
@@ -62,10 +64,10 @@ with st.sidebar.expander("⚠️ Dev Tools"):
 # --- File Processing ---
 if autoflow_file and maddenco_file and location:
     store_id = location.split(" - ")[0].strip()
+
     autoflow_df = pd.read_csv(autoflow_file)
     autoflow_df["RO#"] = autoflow_df["RO#"].astype(str).str.strip()
 
-    # Load MaddenCo and extract Invoice Date
     maddenco_df = pd.read_excel(maddenco_file, header=1)
     maddenco_df = maddenco_df[maddenco_df["Unnamed: 1"] == "Invoice"]
     maddenco_df = maddenco_df.rename(columns={
@@ -80,11 +82,11 @@ if autoflow_file and maddenco_file and location:
     merged_df = pd.merge(autoflow_df, maddenco_df, on="RO#", how="left")
     merged_df["Invoice Total"] = pd.to_numeric(merged_df["Invoice Total"], errors='coerce')
 
-    # Calculate DVI Sent + Status Category
     merged_df["DVI Sent"] = merged_df.apply(
         lambda row: "Y" if row["Sent"] == "✓" and (row["Sent via Text"] != "--" or row["Sent via Email"] != "--") else "N",
         axis=1
     )
+
     merged_df["Status Category"] = merged_df.apply(
         lambda row: (
             "Viewed" if row["Customer Viewed"] != "--" else
@@ -94,13 +96,12 @@ if autoflow_file and maddenco_file and location:
         axis=1
     )
 
-    # --- Insert into DB (Skip Duplicates) ---
     try:
         rows_to_insert = merged_df[[
             "RO#", "Invoice date", "Status Category", "Invoice Total", "Customer", "Vehicle", "Customer Viewed", "Sent"
         ]].dropna(subset=["Invoice date"])
 
-        inserted_count = 0
+        inserted = 0
         for _, row in rows_to_insert.iterrows():
             cursor.execute("""
                 SELECT 1 FROM dvi_reports
@@ -125,13 +126,20 @@ if autoflow_file and maddenco_file and location:
                 row["Customer Viewed"],
                 row["Sent"]
             ))
-            inserted_count += 1
+            inserted += 1
         conn.commit()
-        st.success(f"✅ Uploaded data saved to database under location: {location}. Inserted {inserted_count} new rows.")
+        st.success(f"✅ Uploaded data saved to database under location: {location}. {inserted} new rows added.")
     except Exception as e:
         st.error(f"❌ Failed to insert data: {e}")
 
-# --- View Stored Reports with Date Filter ---
+    st.subheader("All Matched ROs")
+    st.dataframe(merged_df[[
+        "RO#", "Invoice date", "Status Category", "Invoice Total", "Customer", "Vehicle", "Customer Viewed", "Sent"
+    ]])
+else:
+    st.info("Please upload both files and select a store location to begin.")
+
+# --- View Stored Reports ---
 st.header("📍 View Stored Reports by Location")
 
 cursor.execute("SELECT DISTINCT location FROM dvi_reports ORDER BY location ASC")
@@ -151,7 +159,7 @@ if locations:
 
     df = pd.read_sql_query("""
         SELECT * FROM dvi_reports
-        WHERE location = ? AND DATE(invoice_date) BETWEEN ? AND ?
+        WHERE location = ? AND invoice_date >= ? AND invoice_date <= ?
     """, conn, params=(selected_loc, start_date, end_date))
 
     if not df.empty:
@@ -177,8 +185,8 @@ if locations:
 
         st.subheader("📋 Stored RO Table")
         st.dataframe(df[[
-            "ro_number", "invoice_date", "status_category", "invoice_total",
-            "customer", "vehicle", "customer_viewed", "sent", "upload_date"
+            "ro_number", "invoice_date", "status_category", "invoice_total", "customer",
+            "vehicle", "customer_viewed", "sent", "upload_date"
         ]])
     else:
         st.warning(f"No records found for {selected_loc} in selected date range.")
