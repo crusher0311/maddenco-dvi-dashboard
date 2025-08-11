@@ -1,0 +1,13 @@
+streamlit
+pandas
+plotly
+kaleido
+python-dateutil
+reportlab
+openpyxl
+xlrd
+numpy
+streamlit-cookies-manager
+sqlalchemy
+pymysql
+mysql-connector-python
