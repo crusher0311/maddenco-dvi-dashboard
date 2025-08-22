@@ -9,16 +9,14 @@ import json
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.engine import Engine
-import config  # expects DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+import config  # expects SQLALCHEMY_DATABASE_URI (string or URL) and optional SQLALCHEMY_ENGINE_OPTIONS (dict)
 
-# Build SQLAlchemy engine for MySQL (pymysql)
+# Build SQLAlchemy engine from the unified URI in config.py
 def get_engine() -> Engine:
-    conn_str = (
-        f"mysql+pymysql://{config.DB_USER}:{config.DB_PASSWORD}"
-        f"@{config.DB_HOST}:{config.DB_PORT}/{config.DB_NAME}"
-    )
+    # Pick up optional engine options (e.g., connect_args / timeouts) if present
+    engine_opts = getattr(config, "SQLALCHEMY_ENGINE_OPTIONS", {}) or {}
     # echo=False in production; set True for debugging queries
-    return create_engine(conn_str, pool_pre_ping=True, echo=False)
+    return create_engine(config.SQLALCHEMY_DATABASE_URI, pool_pre_ping=True, echo=False, **engine_opts)
 
 def init_db():
     """Create uploads, data_rows, and users tables if they don't exist."""
@@ -80,7 +78,7 @@ def insert_rows(rows, filename=None, org=None, store_location=None):
     upload_id = None
     with engine.begin() as conn:
         # record upload
-        res = conn.execute(
+        conn.execute(
             text("INSERT INTO uploads (filename, org, store_location) VALUES (:fn, :org, :loc)"),
             {"fn": filename or "", "org": org or "", "loc": store_location or ""}
         )
@@ -111,7 +109,7 @@ def insert_rows(rows, filename=None, org=None, store_location=None):
                     "location": r.get("location")
                 })
                 inserted += 1
-            except SQLAlchemyError as e:
+            except SQLAlchemyError:
                 # likely unique constraint violation -> skip
                 skipped += 1
             except Exception:
@@ -166,7 +164,12 @@ def get_uploads(limit=200):
     import pandas as pd
     engine = get_engine()
     with engine.begin() as conn:
-        df = pd.read_sql(text("SELECT id, filename, org, store_location, uploaded_at FROM uploads ORDER BY uploaded_at DESC LIMIT :lim"), conn, params={"lim": int(limit)}, parse_dates=["uploaded_at"])
+        df = pd.read_sql(
+            text("SELECT id, filename, org, store_location, uploaded_at FROM uploads ORDER BY uploaded_at DESC LIMIT :lim"),
+            conn,
+            params={"lim": int(limit)},
+            parse_dates=["uploaded_at"]
+        )
     return df
 
 def delete_upload(upload_id):
